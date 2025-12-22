@@ -31,7 +31,9 @@ llm = ChatOllama(
     num_ctx=4096
 )
 
-retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+retriever = vectorstore.as_retriever(
+    search_kwargs={"k": 3, "filter": {"department": "finance"}}
+)
 
 @cl.on_chat_start
 async def start():

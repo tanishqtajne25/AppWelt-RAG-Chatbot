@@ -1,86 +1,98 @@
 import os
+import shutil
+
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter 
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
-#Config : hard coded
+
+# ---------------- CONFIG ----------------
 DATA_PATH = "./data"
 CHROMA_PATH = "./chroma_db"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-# Loading the documents
+ALLOWED_DEPARTMENTS = {"hr", "finance", "general"}
+# --------------------------------------
+
+
 def load_documents():
     """
-    Traverses the data folder, loads PDFs, and assigns 'role' metadata
-    based on the folder name (e.g., data/finance -> role: finance).
+    Loads PDFs from data/<department>/ folders and assigns metadata.
     """
 
     documents = []
-    for root, dirs, files in os.walk(DATA_PATH):
+
+    for root, _, files in os.walk(DATA_PATH):
         for file in files:
-            if file.endswith(".pdf"):
-                file_path = os.path.join(root, file)
+            if not file.lower().endswith(".pdf"):
+                continue
 
-                # determinia specific role, HR, finance or general purpose
-                # if file in hr, role is hr
-                folder_name = os.path.basename(root)
-                role = folder_name if folder_name in ['hr', 'finance'] else 'general'
-                ## safety check
-                print(f"Loading: {file} | Role: {role}")
+            file_path = os.path.join(root, file)
+            folder_name = os.path.basename(root).lower()
 
-                try:
-                    loader = PyPDFLoader(file_path)
-                    docs = loader.load()
+            if folder_name not in ALLOWED_DEPARTMENTS:
+                print(f"Skipping {file} (unknown department: {folder_name})")
+                continue
 
-                    ## taging every page with that specific role
-                    for doc in docs:
-                        doc.metadata["source"] = file
-                        doc.metadata["role"] = role
+            print(f"Loading: {file} | Department: {folder_name}")
 
-                    documents.extend(docs)
-                
-                except Exception as e:
-                    print(f"failed to load {file}: {e}")
-    
+            try:
+                loader = PyPDFLoader(file_path)
+                docs = loader.load()
+
+                for i, doc in enumerate(docs):
+                    doc.metadata["source"] = file
+                    doc.metadata["department"] = folder_name
+                    doc.metadata["doc_id"] = f"{file}_{i}"
+
+
+                documents.extend(docs)
+
+            except Exception as e:
+                print(f"Failed to load {file}: {e}")
+
     return documents
 
-##Chroma vector DB
-def create_vector_db():
-    print("1--Loading Documents")
-    docs = load_documents()
-    ## safety check
-    if not docs:
-        print("No document found, upload documents to data folder")
-        return
-    
-    print(f"SPLITTING {len(docs)} Pages")
 
-    # text to chunks
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,   
-        chunk_overlap=200  
+def create_vector_db():
+    # Optional but STRONGLY recommended
+    if os.path.exists(CHROMA_PATH):
+        print("Clearing existing Chroma DB...")
+        shutil.rmtree(CHROMA_PATH)
+
+    print("Loading documents...")
+    docs = load_documents()
+
+    if not docs:
+        print("No documents found. Check data folder.")
+        return
+
+    print(f"Splitting {len(docs)} pages...")
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
     )
 
-    chunks = text_splitter.split_documents(docs)
-    print(f"{len(chunks)} are formed...")
+    chunks = splitter.split_documents(docs)
+    print(f"Created {len(chunks)} chunks.")
 
-    # creating vector db
-    print("\nCreating Vector DB \n")
+    print("Creating vector database...")
 
     embeddings = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
-        model_kwargs={'device':'cpu'}
+        model_kwargs={"device": "cpu"},
     )
 
     Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
-        persist_directory=CHROMA_PATH
+        persist_directory=CHROMA_PATH,
     )
-    print("created DB successdully")
+
+    print("Vector DB created successfully.")
+
 
 if __name__ == "__main__":
     create_vector_db()
-
-
