@@ -1,44 +1,67 @@
+import os
 import chainlit as cl
+
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.chat_models import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import HumanMessage, AIMessage
 
 # --- CONFIGURATION ---
-CHROMA_PATH = "./chroma_db"
+CHROMA_PATH = "./chroma_db"          # must match ingest.py
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-LLM_MODEL = "llama3.1" 
+LLM_MODEL = "llama3.1"
 
-print("Loading Resources...")
+print("Loading resources...")
+
+# Embeddings
 embedding_function = HuggingFaceEmbeddings(
     model_name=EMBEDDING_MODEL,
-    model_kwargs={'device': 'cpu'} 
+    model_kwargs={"device": "cpu"},
 )
 
-vectorstore = Chroma(
-    persist_directory=CHROMA_PATH, 
-    embedding_function=embedding_function
-)
+# Vector store
+if not os.path.exists(CHROMA_PATH):
+    print(f"❌ Chroma DB not found at {CHROMA_PATH}. Run ingest.py first.")
+    vectorstore = None
+    retriever = None
+else:
+    vectorstore = Chroma(
+        persist_directory=CHROMA_PATH,
+        embedding_function=embedding_function,
+    )
+
+    # Use simple similarity search for now (stable)
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+    print("✅ Vectorstore and retriever loaded.")
 
 # Main LLM
 llm = ChatOllama(
-    model=LLM_MODEL, 
-    temperature=0,  # Strict mode
-    num_ctx=4096
+    model=LLM_MODEL,
+    temperature=0,      # strict / deterministic
+    num_ctx=4096,
 )
 
-retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
 @cl.on_chat_start
 async def start():
     cl.user_session.set("chat_history", [])
-    await cl.Message(content="Hello! I am ready. Ask me anything about company policies.").send()
+    await cl.Message(
+        content="Hello! I am ready. Ask me anything about company policies."
+    ).send()
+
 
 @cl.on_message
 async def main(message: cl.Message):
-    history = cl.user_session.get("chat_history")
-    
+    # Safety: if vectorstore not ready
+    if retriever is None:
+        await cl.Message(
+            content="Vector database not found. Please run ingest.py and restart the app."
+        ).send()
+        return
+
+    history = cl.user_session.get("chat_history") or []
+
     msg = cl.Message(content="")
     await msg.send()
 
@@ -46,9 +69,11 @@ async def main(message: cl.Message):
     query_text = message.content
 
     if len(history) > 0:
-        # Improved Prompt: Explicitly forbids answering
-        rephrase_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a precise search query generator.
+        rephrase_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    """You are a precise search query generator.
 Your task is to rewrite the user's question to be standalone, using the chat history for context.
 RULES:
 1. Output ONLY the rewritten question.
@@ -70,66 +95,95 @@ Example 3 (Correction):
 Input: "When do they get paid?"
 Bad Output: They get paid on the 5th.
 Good Output: When do employees get paid?
-"""),
-            ("placeholder", "{chat_history}"),
-            ("human", "{input}"),
-        ])
-        
-        # We use a lower temperature chain specifically for rephrasing if possible, 
-        # but here we rely on the main LLM with temp=0
+""",
+                ),
+                ("placeholder", "{chat_history}"),
+                ("human", "{input}"),
+            ]
+        )
+
         rephrase_chain = rephrase_prompt | llm
-        res = await rephrase_chain.ainvoke({"chat_history": history, "input": message.content})
-        
-        clean_query = res.content.strip().replace('"', '')
-        
+        res = await rephrase_chain.ainvoke(
+            {"chat_history": history, "input": message.content}
+        )
+
+        clean_query = res.content.strip().replace('"', "")
+
         print(f"DEBUG: Original Q: {message.content}")
         print(f"DEBUG: Rephrased Q: {clean_query}")
-        
-        # --- DEFENSE MECHANISM ---
-        # If it looks like a statement (no question mark) or is too long, reject it.
+
+        # basic guard
         if clean_query.endswith("?") and len(clean_query) < 150:
             query_text = clean_query
         else:
-            print("DEBUG: Rephrasing failed (Not a question). Using original.")
+            print("DEBUG: Rephrasing failed / not a question. Using original.")
 
     # --- STEP 2: RETRIEVE ---
-    docs = await retriever.ainvoke(query_text)
-    
+    try:
+        docs = await retriever.ainvoke(query_text)
+    except Exception as e:
+        print(f"❌ Retrieval error: {e}")
+        docs = []
+
     # --- STEP 3: ANSWER ---
-    context_text = "\n\n".join([d.page_content for d in docs])
-    
-    qa_prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a helpful corporate assistant. Answer the user's question based strictly on the context provided below.\nIf the context does not contain the answer, say 'I cannot find this information in the documents.'\n\nContext:\n{context}"),
-        ("human", "{question}"),
-    ])
-    
-    qa_chain = qa_prompt | llm
-    res = await qa_chain.ainvoke({"context": context_text, "question": query_text})
-    answer = res.content
+    if not docs:
+        answer = "I cannot find this information in the company documents."
+        text_elements = []
+    else:
+        context_text = "\n\n".join(d.page_content for d in docs)
 
-    # --- UPDATE MEMORY & UI ---
-    history.append(HumanMessage(content=message.content))
-    history.append(AIMessage(content=answer))
-    
-    # Keep history short to avoid confusion
-    if len(history) > 6:
-        history = history[-6:]
-    cl.user_session.set("chat_history", history)
+        qa_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """You are a helpful corporate assistant. Use ONLY the context below:
 
-    text_elements = []
-    if docs:
+    {context}
+
+    Answer the user's question based STRICTLY on this context.
+    Quote exact numbers and rules.
+    Do NOT infer, assume, or add information not explicitly stated.
+    If the answer is not in the context, say: "I cannot find this information in the documents.""",
+            ),
+            ("human", "{question}"),
+        ]
+    )
+
+
+        qa_chain = qa_prompt | llm
+        res = await qa_chain.ainvoke(
+            {"context": context_text, "question": query_text}
+        )
+        answer = res.content
+
+        text_elements = []
         for idx, doc in enumerate(docs):
             source_name = doc.metadata.get("source", "Unknown")
             page_num = doc.metadata.get("page", "Unknown")
-            role_tag = doc.metadata.get("role", "general")
-            
+            dept_tag = doc.metadata.get("department", "general")
+
             text_elements.append(
-                cl.Text(content=doc.page_content, name=f"Source {idx+1} ({source_name})")
+                cl.Text(
+                    content=doc.page_content,
+                    name=f"Source {idx + 1} ({source_name})",
+                )
             )
-            answer += f"\n* [Source {idx+1}] {source_name} (Page {page_num}) [{role_tag.upper()}]"
-    else:
-        answer += "\n\n*(No relevant documents found)*"
+            answer += (
+                f"\n\n* [Source {idx+1}] {source_name} "
+                f"(Page {page_num}) [{dept_tag.upper()}]"
+            )
+
+    # --- UPDATE MEMORY ---
+    history.append({"role": "user", "content": message.content})
+    history.append({"role": "assistant", "content": answer})
+
+    if len(history) > 6:
+        history = history[-6:]
+
+    cl.user_session.set("chat_history", history)
 
     msg.content = answer
     msg.elements = text_elements
     await msg.update()
+
+print("✅ Chainlit app ready!")
