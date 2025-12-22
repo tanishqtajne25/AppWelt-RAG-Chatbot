@@ -3,16 +3,13 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.chat_models import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_core.prompts import MessagesPlaceholder
-
+from langchain_core.messages import HumanMessage, AIMessage
 
 # --- CONFIGURATION ---
 CHROMA_PATH = "./chroma_db"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 LLM_MODEL = "llama3.1" 
 
-# --- 1. INITIALIZE RESOURCES ---
 print("Loading Resources...")
 embedding_function = HuggingFaceEmbeddings(
     model_name=EMBEDDING_MODEL,
@@ -24,20 +21,17 @@ vectorstore = Chroma(
     embedding_function=embedding_function
 )
 
-# Global LLM instance
+# Main LLM
 llm = ChatOllama(
     model=LLM_MODEL, 
-    temperature=0,
+    temperature=0,  # Strict mode
     num_ctx=4096
 )
 
-retriever = vectorstore.as_retriever(
-    search_kwargs={"k": 3, "filter": {"department": "finance"}}
-)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
 @cl.on_chat_start
 async def start():
-    # We just store an empty history list in the session
     cl.user_session.set("chat_history", [])
     await cl.Message(content="Hello! I am ready. Ask me anything about company policies.").send()
 
@@ -48,66 +42,80 @@ async def main(message: cl.Message):
     msg = cl.Message(content="")
     await msg.send()
 
-    # --- STEP 1: CONTEXTUALIZE QUESTION (If history exists) ---
-    # If we have history, we need to rewrite the user's question to include context.
-    # e.g., User: "What is the budget?" -> Bot: "..."; User: "Who approved it?" -> "Who approved the budget?"
-    
+    # --- STEP 1: SMART REPHRASING ---
     query_text = message.content
 
     if len(history) > 0:
+        # Improved Prompt: Explicitly forbids answering
         rephrase_prompt = ChatPromptTemplate.from_messages([
-            ("system", "Given a chat history and the latest user question which might reference context in the chat history, formulate a standalone question which can be understood without the chat history. Do NOT answer the question, just reformulate it if needed and otherwise return it as is."),
+            ("system", """You are a precise search query generator.
+Your task is to rewrite the user's question to be standalone, using the chat history for context.
+RULES:
+1. Output ONLY the rewritten question.
+2. Do NOT answer the question.
+3. Do NOT provide explanations.
+4. If the question is already standalone, repeat it exactly.
+
+Example 1:
+History: User "Who is the CEO?" Bot "John Doe".
+Input: "How old is he?"
+Output: How old is John Doe?
+
+Example 2:
+History: User "What is the budget?" Bot "$500".
+Input: "Who approved it?"
+Output: Who approved the budget?
+
+Example 3 (Correction):
+Input: "When do they get paid?"
+Bad Output: They get paid on the 5th.
+Good Output: When do employees get paid?
+"""),
             ("placeholder", "{chat_history}"),
             ("human", "{input}"),
         ])
-            
+        
+        # We use a lower temperature chain specifically for rephrasing if possible, 
+        # but here we rely on the main LLM with temp=0
         rephrase_chain = rephrase_prompt | llm
         res = await rephrase_chain.ainvoke({"chat_history": history, "input": message.content})
-        query_text = res.content
+        
+        clean_query = res.content.strip().replace('"', '')
+        
+        print(f"DEBUG: Original Q: {message.content}")
+        print(f"DEBUG: Rephrased Q: {clean_query}")
+        
+        # --- DEFENSE MECHANISM ---
+        # If it looks like a statement (no question mark) or is too long, reject it.
+        if clean_query.endswith("?") and len(clean_query) < 150:
+            query_text = clean_query
+        else:
+            print("DEBUG: Rephrasing failed (Not a question). Using original.")
 
-    
-    # --- STEP 2: RETRIEVE DOCUMENTS ---
-    # Search the vector DB with the (possibly rephrased) query
+    # --- STEP 2: RETRIEVE ---
     docs = await retriever.ainvoke(query_text)
     
-    # --- STEP 3: GENERATE ANSWER ---
-    # Prepare the context text from the docs
+    # --- STEP 3: ANSWER ---
     context_text = "\n\n".join([d.page_content for d in docs])
     
-    qa_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are a secure corporate assistant.
-    Use the following pieces of retrieved context to answer the question.
-
-    If the answer is explicitly stated in the context, answer directly.
-    Only say "I do not find this information in the allowed documents"
-    if the information is completely absent.
-    Do not introduce additional assumptions or ambiguities.
-
-    Context:
-    {context}
-    """
-            ),
-            ("human", "{input}"),
-        ]
-    )
-
+    qa_prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are a helpful corporate assistant. Answer the user's question based strictly on the context provided below.\nIf the context does not contain the answer, say 'I cannot find this information in the documents.'\n\nContext:\n{context}"),
+        ("human", "{question}"),
+    ])
     
-    # We manually invoke the LLM to get the final answer
     qa_chain = qa_prompt | llm
-    res = await qa_chain.ainvoke({"context": context_text, "input": query_text})
+    res = await qa_chain.ainvoke({"context": context_text, "question": query_text})
     answer = res.content
 
-    # --- STEP 4: UPDATE MEMORY & UI ---
-    
-    # Save to history
+    # --- UPDATE MEMORY & UI ---
     history.append(HumanMessage(content=message.content))
     history.append(AIMessage(content=answer))
+    
+    # Keep history short to avoid confusion
+    if len(history) > 6:
+        history = history[-6:]
     cl.user_session.set("chat_history", history)
 
-    # Format sources for UI
     text_elements = []
     if docs:
         for idx, doc in enumerate(docs):
