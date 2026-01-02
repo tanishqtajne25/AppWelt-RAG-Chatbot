@@ -9,8 +9,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 DATA_PATH = "./data"
 CHROMA_PATH = "./chroma_db"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-# --------------------------------------
-
+# ----------------------------------------
 def load_documents():
     """
     Loads all PDFs and Text files directly from the data/ folder.
