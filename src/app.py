@@ -5,10 +5,24 @@ from langchain_community.chat_models import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
 
+# from dotenv import load_dotenv          
+# from langchain_groq import ChatGroq     
+
 # --- CONFIGURATION ---
 CHROMA_PATH = "./chroma_db"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 LLM_MODEL = "llama3.1" 
+
+# --- OPTION 2: GROQ API (Uncomment to use) ---
+# load_dotenv() 
+# 
+# if not os.getenv("GROQ_API_KEY"):
+#     print("ERROR: GROQ_API_KEY not found in .env")
+#
+# llm = ChatGroq(
+#     model="llama-3.3-70b-versatile", 
+#     temperature=0
+# )
 
 # --- 1. INITIALIZE RESOURCES ---
 print("Loading Resources...")
