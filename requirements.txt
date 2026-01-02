@@ -6,3 +6,6 @@ pypdf
 sentence-transformers
 ollama
 chainlit
+
+requests
+beautifulsoup4

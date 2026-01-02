@@ -1,51 +1,45 @@
 import os
 import shutil
-
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-
 
 # ---------------- CONFIG ----------------
 DATA_PATH = "./data"
 CHROMA_PATH = "./chroma_db"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-
-ALLOWED_DEPARTMENTS = {"hr", "finance", "general"}
 # --------------------------------------
-
 
 def load_documents():
     """
-    Loads PDFs from data/<department>/ folders and assigns metadata.
+    Loads all PDFs and Text files directly from the data/ folder.
+    Assigns 'General' category to everything.
     """
-
     documents = []
-
+    
+    # Walk through the directory
     for root, _, files in os.walk(DATA_PATH):
         for file in files:
-            if not file.lower().endswith(".pdf"):
-                continue
-
             file_path = os.path.join(root, file)
-            folder_name = os.path.basename(root).lower()
+            
+            # Determine Loader
+            if file.lower().endswith(".pdf"):
+                loader = PyPDFLoader(file_path)
+            elif file.lower().endswith(".txt"):
+                loader = TextLoader(file_path, encoding="utf-8")
+            else:
+                continue # Skip images/other files
 
-            if folder_name not in ALLOWED_DEPARTMENTS:
-                print(f"Skipping {file} (unknown department: {folder_name})")
-                continue
-
-            print(f"Loading: {file} | Department: {folder_name}")
+            print(f"Loading: {file}")
 
             try:
-                loader = PyPDFLoader(file_path)
                 docs = loader.load()
 
                 for i, doc in enumerate(docs):
                     doc.metadata["source"] = file
-                    doc.metadata["department"] = folder_name
+                    doc.metadata["category"] = "General"  # Default category for flat files
                     doc.metadata["doc_id"] = f"{file}_{i}"
-
 
                 documents.extend(docs)
 
@@ -54,21 +48,19 @@ def load_documents():
 
     return documents
 
-
 def create_vector_db():
-    # Optional but STRONGLY recommended
     if os.path.exists(CHROMA_PATH):
-        print("Clearing existing Chroma DB...")
+        print("Clearing existing database...")
         shutil.rmtree(CHROMA_PATH)
 
-    print("Loading documents...")
+    print("Scanning data folder...")
     docs = load_documents()
 
     if not docs:
-        print("No documents found. Check data folder.")
+        print("No documents found in 'data/' folder!")
         return
 
-    print(f"Splitting {len(docs)} pages...")
+    print(f"Processing {len(docs)} pages...")
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
@@ -76,9 +68,9 @@ def create_vector_db():
     )
 
     chunks = splitter.split_documents(docs)
-    print(f"Created {len(chunks)} chunks.")
+    print(f"Created {len(chunks)} text chunks.")
 
-    print("Creating vector database...")
+    print("Generating Embeddings...")
 
     embeddings = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
@@ -91,8 +83,7 @@ def create_vector_db():
         persist_directory=CHROMA_PATH,
     )
 
-    print("Vector DB created successfully.")
-
+    print("✅ Database Ready!")
 
 if __name__ == "__main__":
     create_vector_db()
