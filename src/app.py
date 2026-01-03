@@ -46,8 +46,11 @@ llm = ChatOllama(
 )
 
 # UPDATED: Removed the 'finance' filter so it searches ALL jewelry docs
+# MMR (Maximal Marginal Relevance) finds the best match, then finds 
+# other matches that are diverse, preventing repetitive context.
 retriever = vectorstore.as_retriever(
-    search_kwargs={"k": 3}
+    search_type="mmr",
+    search_kwargs={"k": 5, "fetch_k": 20}
 )
 
 @cl.on_chat_start
