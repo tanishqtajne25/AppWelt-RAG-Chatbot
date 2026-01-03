@@ -1,3 +1,4 @@
+import os
 import chainlit as cl
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -21,7 +22,8 @@ LLM_MODEL = "llama3.1"
 #
 # llm = ChatGroq(
 #     model="llama-3.3-70b-versatile", 
-#     temperature=0
+#     temperature=0,
+#     max_context_length=4096
 # )
 
 # --- 1. INITIALIZE RESOURCES ---
@@ -110,29 +112,18 @@ async def main(message: cl.Message):
     res = await qa_chain.ainvoke({"context": context_text, "input": query_text})
     answer = res.content
 
-    # --- STEP 4: UPDATE MEMORY & UI ---
+# --- STEP 4: UPDATE MEMORY & UI ---
     
-    # Save to history
+    # Append new interaction
     history.append(HumanMessage(content=message.content))
     history.append(AIMessage(content=answer))
+
+    # LIMIT HISTORY: Keep only the last 10 messages (5 user + 5 AI)
+    if len(history) > 10:
+        history = history[-10:]
+
+    # Save back to session
     cl.user_session.set("chat_history", history)
 
-    # Format sources for UI
-    # text_elements = []
-    # if docs:
-    #     for idx, doc in enumerate(docs):
-    #         source_name = doc.metadata.get("source", "Unknown")
-    #         page_num = doc.metadata.get("page", "Unknown")
-    #         # UPDATED: Changed default tag to 'General' (matches ingest.py)
-    #         category_tag = doc.metadata.get("category", "General")
-            
-    #         text_elements.append(
-    #             cl.Text(content=doc.page_content, name=f"Source {idx+1} ({source_name})")
-    #         )
-    #         answer += f"\n* [Source {idx+1}] {source_name} (Page {page_num}) [{category_tag.upper()}]"
-    # else:
-    #     answer += "\n\n*(No relevant documents found)*"
-
     msg.content = answer
-    # msg.elements = text_elements
     await msg.update()
