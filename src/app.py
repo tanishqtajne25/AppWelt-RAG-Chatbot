@@ -84,6 +84,21 @@ async def main(message: cl.Message):
     
     # --- STEP 2: RETRIEVE DOCUMENTS ---
     docs = await retriever.ainvoke(query_text)
+    # --- SAFETY GUARD: CHECK FOR EMPTY RETRIEVAL ---
+    if not docs:
+        answer = "I do not find this information in the allowed documents."
+        
+        # Update History immediately
+        history.append(HumanMessage(content=message.content))
+        history.append(AIMessage(content=answer))
+        if len(history) > 10:
+            history = history[-10:]
+        cl.user_session.set("chat_history", history)
+
+        # Send response and EXIT function
+        msg.content = answer
+        await msg.update()
+        return
     
     # --- STEP 3: GENERATE ANSWER ---
     context_text = "\n\n".join([d.page_content for d in docs])
