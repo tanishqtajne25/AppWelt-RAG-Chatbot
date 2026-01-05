@@ -72,7 +72,7 @@ async def main(message: cl.Message):
 
     if len(history) > 0:
         rephrase_prompt = ChatPromptTemplate.from_messages([
-            ("system", "Given a chat history and the latest user question which might reference context in the chat history, formulate a standalone question which can be understood without the chat history. Do NOT answer the question, just reformulate it if needed and otherwise return it as is."),
+            ("system", "Given a chat history and the latest user question which might reference context in the chat history, formulate a standalone question which can be understood without the chat history. Do NOT answer the question, just reformulate it if needed and otherwise return it as it is."),
             ("placeholder", "{chat_history}"),
             ("human", "{input}"),
         ])

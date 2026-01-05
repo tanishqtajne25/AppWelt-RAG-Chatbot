@@ -1,3 +1,4 @@
+python-dotenv
 langchain
 langchain-community
 langchain-chroma
@@ -9,3 +10,7 @@ chainlit
 
 requests
 beautifulsoup4
+
+fastapi
+uvicorn[standard]
+pydantic

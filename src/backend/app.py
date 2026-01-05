@@ -1,0 +1,28 @@
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List, Dict
+from rag import get_answer  # Import your logic
+
+app = FastAPI()
+
+# Input Schema
+class ChatRequest(BaseModel):
+    message: str
+    history: List[Dict[str, str]] = []  
+    # Example history: [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+
+@app.post("/chat")
+async def chat_endpoint(request: ChatRequest):
+    try:
+        # Call your existing logic (now inside rag.py)
+        response_text = await get_answer(request.message, request.history)
+        
+        return {"response": response_text}
+    
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
