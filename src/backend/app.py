@@ -1,15 +1,14 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict
-from rag import get_answer  # Import your logic
+from rag import get_answer  
 
 app = FastAPI()
 
-# Input Schema
+#input
 class ChatRequest(BaseModel):
     message: str
     history: List[Dict[str, str]] = []  
-    # Example history: [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):

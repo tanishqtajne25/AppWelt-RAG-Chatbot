@@ -9,12 +9,12 @@ from langchain_core.messages import HumanMessage, AIMessage
 # from dotenv import load_dotenv          
 # from langchain_groq import ChatGroq     
 
-# --- CONFIGURATION ---
+# Config
 CHROMA_PATH = "./chroma_db"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 LLM_MODEL = "llama3.1" 
 
-# --- 1. INITIALIZE RESOURCES (Run once on startup) ---
+# load resources   
 print("Loading Resources...")
 
 embedding_function = HuggingFaceEmbeddings(
@@ -27,15 +27,14 @@ vectorstore = Chroma(
     embedding_function=embedding_function
 )
 
-# --- 2. SELECT YOUR LLM ---
-# [OPTION 1] LOCAL OLLAMA (Active)
+# Ollame local
 llm = ChatOllama(
     model=LLM_MODEL, 
     temperature=0,
     num_ctx=4096
 )
 
-# [OPTION 2] GROQ API (Inactive)
+# Opt 2 : GROQ API 
 # load_dotenv() 
 # if not os.getenv("GROQ_API_KEY"):
 #     print("ERROR: GROQ_API_KEY not found in .env")
@@ -69,7 +68,7 @@ async def get_answer(user_input: str, history_data: list):
         elif msg['role'] == 'assistant':
             chat_history.append(AIMessage(content=msg['content']))
 
-    # --- STEP 1: CONTEXTUALIZE QUESTION ---
+    # rephrase question according to history
     query_text = user_input
 
     if len(chat_history) > 0:
@@ -83,14 +82,14 @@ async def get_answer(user_input: str, history_data: list):
         res = await rephrase_chain.ainvoke({"chat_history": chat_history, "input": user_input})
         query_text = res.content
 
-    # --- STEP 2: RETRIEVE DOCUMENTS ---
+    # retrieve docs
     docs = await retriever.ainvoke(query_text)
 
-    # --- SAFETY GUARD: CHECK FOR EMPTY RETRIEVAL ---
+    # check for empty retrievels
     if not docs:
         return "I do not find this information in the allowed documents."
 
-    # --- STEP 3: GENERATE ANSWER ---
+    # answers
     context_text = "\n\n".join([d.page_content for d in docs])
     
     qa_prompt = ChatPromptTemplate.from_messages(
